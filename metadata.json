@@ -1,0 +1,6 @@
+{
+  "name": "BT Keyboard & Mouse",
+  "description": "Full laptop virtual keyboard and USB OTG mouse forwarder via Bluetooth HID",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
