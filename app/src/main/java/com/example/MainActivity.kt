@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConsts
+import com.example.keyboard.AndroidKeyToHid
 import com.example.ui.components.DeviceScanDialog
 import com.example.ui.components.FullscreenLandscapeKeyboard
 import com.example.ui.components.LimitationsInfoDialog
@@ -139,6 +141,32 @@ class MainActivity : ComponentActivity() {
             return true
         }
         return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (hidManager.uiState.value.isHidActive) {
+            val hidCode = AndroidKeyToHid.mapKeyCodeToHid(event.keyCode)
+            val modifier = AndroidKeyToHid.mapModifierMask(event.keyCode)
+
+            if (modifier != 0.toByte()) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    hidManager.setModifier(modifier, true)
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    hidManager.setModifier(modifier, false)
+                }
+                return true
+            }
+
+            if (hidCode != HidConsts.KEY_NONE) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    hidManager.sendKeyDown(hidCode)
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    hidManager.sendKeyUp(hidCode)
+                }
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onResume() {
