@@ -180,20 +180,20 @@ fun StatusDashboard(
             )
 
             StatusCard(
-                title = "Target",
+                title = "Target Device",
                 value = targetName,
-                valueColor = if (btState.targetDevice != null) CyanNeon else TextSecondary,
+                valueColor = if (btState.connectedDevice != null) GreenActive else if (btState.targetDevice != null) CyanNeon else TextSecondary,
                 icon = Icons.Default.TabletAndroid,
-                modifier = Modifier.weight(1.3f)
+                modifier = Modifier.weight(1.4f)
             )
 
             StatusCard(
                 title = "HID Status",
                 value = when (btState.connectionState) {
-                    BluetoothProfile.STATE_CONNECTED -> "Connected"
-                    BluetoothProfile.STATE_CONNECTING -> "Connecting"
-                    BluetoothProfile.STATE_DISCONNECTING -> "Disconnecting"
-                    else -> "Disconnected"
+                    BluetoothProfile.STATE_CONNECTED -> "CONNECTED"
+                    BluetoothProfile.STATE_CONNECTING -> "CONNECTING"
+                    BluetoothProfile.STATE_DISCONNECTING -> "DISCONNECTING"
+                    else -> "DISCONNECTED"
                 },
                 valueColor = when (btState.connectionState) {
                     BluetoothProfile.STATE_CONNECTED -> GreenActive
@@ -201,42 +201,80 @@ fun StatusDashboard(
                     else -> TextSecondary
                 },
                 icon = Icons.Default.BluetoothConnected,
-                modifier = Modifier.weight(1.2f)
+                modifier = Modifier.weight(1.3f)
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        // Quick Paired Device Selector (if paired devices exist)
+        if (btState.pairedDevices.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Paired:",
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                    fontWeight = FontWeight.Medium
+                )
+                btState.pairedDevices.take(3).forEach { dev ->
+                    val isSelected = btState.targetDevice?.address == dev.address
+                    Surface(
+                        onClick = onScanDevices,
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) CyanNeon.copy(alpha = 0.2f) else DarkBg,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isSelected) CyanNeon else DarkBorder
+                        )
+                    ) {
+                        Text(
+                            text = dev.name ?: dev.address.takeLast(5),
+                            fontSize = 10.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isSelected) CyanNeon else TextSecondary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+        }
 
-        // Main 4 Control Buttons: [ SCAN DEVICES ] [ CONNECT ] [ START ] [ STOP ]
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Main Control Buttons: 2 Distinct, Roomy Rows (NO TEXT CLIPPING!)
+        // Row 1: [ 🔍 SCAN DEVICES ] and [ ⚡ CONNECT / DISCONNECT ]
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // SCAN DEVICES
+            // SCAN DEVICES BUTTON
             OutlinedButton(
                 onClick = onScanDevices,
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanNeon),
                 border = androidx.compose.foundation.BorderStroke(1.dp, CyanNeon),
                 modifier = Modifier
                     .weight(1f)
-                    .height(42.dp)
+                    .height(44.dp)
                     .testTag("scan_devices_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Search,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("SCAN", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("SCAN DEVICES", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
 
-            // CONNECT / DISCONNECT
+            // CONNECT / DISCONNECT BUTTON
             OutlinedButton(
                 onClick = onConnect,
                 enabled = btState.targetDevice != null && !isConnecting,
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = if (isConnected) AmberWarning else BlueElectric
                 ),
@@ -246,21 +284,35 @@ fun StatusDashboard(
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .height(42.dp)
+                    .height(44.dp)
                     .testTag("connect_button")
             ) {
+                Icon(
+                    imageVector = if (isConnected) Icons.Default.BluetoothConnected else Icons.Default.Bluetooth,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = if (isConnected) "DISCONNECT" else "CONNECT",
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
+        }
 
-            // START (ENGAGE HID FORWARDING) - Strictly enabled ONLY when a target BT device is connected!
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Row 2: Prominent [ ▶ START FORWARDING ] and [ ⏹ STOP ]
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // START (ENGAGE HID FORWARDING)
             Button(
                 onClick = onStart,
-                enabled = isConnected && !btState.isHidActive,
-                shape = RoundedCornerShape(8.dp),
+                enabled = (isConnected || btState.targetDevice != null) && !btState.isHidActive,
+                shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = GreenActive,
                     contentColor = DarkBg,
@@ -268,24 +320,29 @@ fun StatusDashboard(
                     disabledContentColor = TextMuted
                 ),
                 modifier = Modifier
-                    .weight(1f)
-                    .height(42.dp)
+                    .weight(1.5f)
+                    .height(48.dp)
                     .testTag("start_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(20.dp)
                 )
-                Spacer(modifier = Modifier.width(2.dp))
-                Text("START", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (btState.isHidActive) "FORWARDING ACTIVE" else "START FORWARDING",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.5.sp
+                )
             }
 
             // STOP (HALT HID FORWARDING)
             Button(
                 onClick = onStop,
                 enabled = btState.isHidActive,
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = RedAlert,
                     contentColor = Color.White,
@@ -294,16 +351,16 @@ fun StatusDashboard(
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .height(42.dp)
+                    .height(48.dp)
                     .testTag("stop_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Stop,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(20.dp)
                 )
-                Spacer(modifier = Modifier.width(2.dp))
-                Text("STOP", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("STOP", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
             }
         }
 
@@ -356,49 +413,63 @@ fun StatusDashboard(
         Spacer(modifier = Modifier.height(12.dp))
 
         // Diagnostic Tri-Fold Status Panel: KEYBOARD | MOUSE | TARGET DEVICE
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
                 .background(DarkBg)
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             // KEYBOARD
-            DetailStatusRow(
-                icon = Icons.Default.Keyboard,
-                section = "KEYBOARD",
-                label1 = "Virtual Keyboard:",
-                val1 = "READY",
-                val1Color = GreenActive,
-                label2 = "HID App:",
-                val2 = if (btState.isAppRegistered) "Registered" else "Pending",
-                val2Color = if (btState.isAppRegistered) CyanNeon else AmberWarning
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(Icons.Default.Keyboard, contentDescription = null, tint = GreenActive, modifier = Modifier.size(14.dp))
+                Text("KB: Ready", fontSize = 11.sp, color = GreenActive, fontWeight = FontWeight.Bold)
+            }
 
             // MOUSE
-            DetailStatusRow(
-                icon = Icons.Default.Mouse,
-                section = "MOUSE",
-                label1 = "USB Mouse:",
-                val1 = if (usbState.isUsbMouseConnected) "Connected (${usbState.mouseDeviceName})" else "Disconnected",
-                val1Color = if (usbState.isUsbMouseConnected) GreenActive else TextSecondary,
-                label2 = "OTG Port:",
-                val2 = if (usbState.isOtgConnected) "Connected" else "Disconnected",
-                val2Color = if (usbState.isOtgConnected) CyanNeon else TextSecondary
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    Icons.Default.Mouse,
+                    contentDescription = null,
+                    tint = if (usbState.isUsbMouseConnected || usbState.hasPointerCapture) GreenActive else TextSecondary,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = if (usbState.hasPointerCapture) "Mouse: Locked"
+                    else if (usbState.isUsbMouseConnected) "Mouse: OTG USB"
+                    else "Mouse: Trackpad",
+                    fontSize = 11.sp,
+                    color = if (usbState.hasPointerCapture || usbState.isUsbMouseConnected) GreenActive else TextSecondary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
-            // TARGET DEVICE
-            DetailStatusRow(
-                icon = Icons.Default.TabletAndroid,
-                section = "TARGET DEVICE",
-                label1 = "Phone/Tablet:",
-                val1 = targetName,
-                val1Color = if (btState.targetDevice != null) CyanNeon else TextSecondary,
-                label2 = "HID:",
-                val2 = if (isConnected) "Connected" else "Disconnected",
-                val2Color = if (isConnected) GreenActive else TextMuted
-            )
+            // TARGET
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    Icons.Default.TabletAndroid,
+                    contentDescription = null,
+                    tint = if (isConnected) GreenActive else if (btState.targetDevice != null) CyanNeon else TextSecondary,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = if (isConnected) "HID: Connected" else if (btState.targetDevice != null) "Ready" else "No Target",
+                    fontSize = 11.sp,
+                    color = if (isConnected) GreenActive else if (btState.targetDevice != null) CyanNeon else TextSecondary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         // Live status message banner

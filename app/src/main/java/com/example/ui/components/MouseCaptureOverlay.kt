@@ -72,8 +72,6 @@ fun MouseCaptureOverlay(
     modifier: Modifier = Modifier
 ) {
     val view = LocalView.current
-    var lastDx by remember { mutableIntStateOf(0) }
-    var lastDy by remember { mutableIntStateOf(0) }
     var activeButtonsMask by remember { mutableStateOf(0.toByte()) }
 
     Column(
@@ -97,7 +95,7 @@ fun MouseCaptureOverlay(
                 Icon(
                     imageVector = Icons.Default.Mouse,
                     contentDescription = null,
-                    tint = if (usbState.isUsbMouseConnected) CyanNeon else TextSecondary
+                    tint = if (usbState.isUsbMouseConnected || usbState.hasPointerCapture) GreenActive else CyanNeon
                 )
                 Column {
                     Text(
@@ -108,27 +106,32 @@ fun MouseCaptureOverlay(
                         letterSpacing = 1.sp
                     )
                     Text(
-                        text = if (usbState.hasPointerCapture) "Pointer Capture Active (Mouse locked to forward)" else "Pointer Capture Inactive",
+                        text = if (usbState.hasPointerCapture)
+                            "🟢 Mouse Locked & Active -> Forwarding to target"
+                        else if (usbState.isUsbMouseConnected)
+                            "USB Mouse detected: ${usbState.mouseDeviceName}"
+                        else
+                            "Touch trackpad or connect OTG mouse",
                         fontSize = 10.sp,
-                        color = if (usbState.hasPointerCapture) GreenActive else TextMuted
+                        color = if (usbState.hasPointerCapture) GreenActive else TextSecondary
                     )
                 }
             }
 
             // Quick capture / focus button
-            if (isHidActive && !usbState.hasPointerCapture) {
+            if (isHidActive) {
                 Surface(
                     onClick = onRequestPointerCapture,
                     shape = RoundedCornerShape(6.dp),
-                    color = CyanNeon.copy(alpha = 0.2f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, CyanNeon),
+                    color = if (usbState.hasPointerCapture) GreenActive.copy(alpha = 0.2f) else CyanNeon.copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (usbState.hasPointerCapture) GreenActive else CyanNeon),
                     modifier = Modifier.testTag("request_capture_button")
                 ) {
                     Text(
-                        text = "LOCK MOUSE",
+                        text = if (usbState.hasPointerCapture) "MOUSE LOCKED" else "LOCK MOUSE",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = CyanNeon,
+                        color = if (usbState.hasPointerCapture) GreenActive else CyanNeon,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
@@ -137,16 +140,16 @@ fun MouseCaptureOverlay(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Multi-function Touch / Mouse Area
+        // Multi-function Touch / Mouse Area (Zero GC & Zero Recomposition Lag for 1GB RAM devices)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(130.dp)
+                .height(110.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(DarkBg)
                 .border(
                     1.dp,
-                    if (usbState.hasPointerCapture) GreenActive.copy(alpha = 0.5f) else DarkBorder,
+                    if (usbState.hasPointerCapture) GreenActive.copy(alpha = 0.6f) else DarkBorder,
                     RoundedCornerShape(8.dp)
                 )
                 .pointerInput(isHidActive) {
@@ -154,10 +157,8 @@ fun MouseCaptureOverlay(
                         onDrag = { change, dragAmount ->
                             change.consume()
                             if (isHidActive) {
-                                val dx = (dragAmount.x * 1.5f).toInt().coerceIn(-127, 127).toByte()
-                                val dy = (dragAmount.y * 1.5f).toInt().coerceIn(-127, 127).toByte()
-                                lastDx = dx.toInt()
-                                lastDy = dy.toInt()
+                                val dx = (dragAmount.x * 1.4f).toInt().coerceIn(-127, 127).toByte()
+                                val dy = (dragAmount.y * 1.4f).toInt().coerceIn(-127, 127).toByte()
                                 hidManager.sendMouseMotion(activeButtonsMask, dx, dy, 0)
                             }
                         }
@@ -192,13 +193,13 @@ fun MouseCaptureOverlay(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "REAL USB MOUSE CAPTURED",
+                        text = "REAL USB MOUSE CAPTURED & LOCKED",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = GreenActive
                     )
                     Text(
-                        text = "Hardware moves are forwarded directly via Bluetooth HID",
+                        text = "All physical mouse movements flow to connected device",
                         fontSize = 10.sp,
                         color = TextSecondary
                     )
@@ -206,7 +207,7 @@ fun MouseCaptureOverlay(
                     Icon(
                         imageVector = Icons.Default.TouchApp,
                         contentDescription = null,
-                        tint = TextSecondary,
+                        tint = if (isHidActive) CyanNeon else TextSecondary,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.height(4.dp))
@@ -218,23 +219,13 @@ fun MouseCaptureOverlay(
                     )
                     Text(
                         text = if (usbState.isUsbMouseConnected)
-                            "USB Mouse detected: ${usbState.mouseDeviceName}. Press START to lock & forward."
+                            "USB Mouse ready: ${usbState.mouseDeviceName}. Move physical mouse or tap START."
                         else
-                            "Connect USB mouse via OTG adapter, or drag here as trackpad",
+                            "Drag finger here to move cursor on target device",
                         fontSize = 10.sp,
                         color = TextMuted,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                }
-
-                if (isHidActive) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "ΔX: $lastDx  |  ΔY: $lastDy  |  Buttons: 0x${activeButtonsMask.toInt().toString(16)}",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = CyanNeon
                     )
                 }
             }

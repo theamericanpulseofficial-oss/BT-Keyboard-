@@ -66,6 +66,10 @@ class BluetoothHidManager(private val context: Context) {
     private var activeModifiers: Byte = 0
     private var lastMouseButtons: Byte = 0
 
+    // Reusable buffers to guarantee ZERO garbage collection allocations on low-memory (1GB RAM) devices
+    private val keyboardReportBuffer = ByteArray(8)
+    private val mouseReportBuffer = ByteArray(4)
+
     private val serviceListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
             if (profile == BluetoothProfile.HID_DEVICE) {
@@ -209,6 +213,34 @@ class BluetoothHidManager(private val context: Context) {
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                     refreshPairedDevices()
                 }
+                BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                    val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
+                    if (device != null) {
+                        Log.i(TAG, "ACL Connected to: ${device.name ?: device.address}")
+                        checkConnectedDevicesNow(device)
+                    }
+                }
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
+                    if (device != null && _uiState.value.connectedDevice?.address == device.address) {
+                        _uiState.value = _uiState.value.copy(
+                            connectionState = BluetoothProfile.STATE_DISCONNECTED,
+                            connectedDevice = null,
+                            isHidActive = false,
+                            statusMessage = "Device ${device.name ?: "Target"} disconnected."
+                        )
+                    }
+                }
             }
         }
     }
@@ -228,6 +260,8 @@ class BluetoothHidManager(private val context: Context) {
             addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }
         context.registerReceiver(btReceiver, filter)
     }
@@ -300,17 +334,25 @@ class BluetoothHidManager(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun checkConnectedDevicesNow() {
+    fun checkConnectedDevicesNow(hintDevice: BluetoothDevice? = null) {
         try {
-            val dev = hidDevice ?: return
-            val connected = dev.connectedDevices
-            if (!connected.isNullOrEmpty()) {
-                val firstDev = connected.first()
+            val dev = hidDevice
+            val connectedList = dev?.connectedDevices
+            val activeDevice = hintDevice ?: connectedList?.firstOrNull()
+
+            if (activeDevice != null) {
                 _uiState.value = _uiState.value.copy(
                     connectionState = BluetoothProfile.STATE_CONNECTED,
-                    connectedDevice = firstDev,
-                    targetDevice = firstDev,
-                    statusMessage = "Target ${firstDev.name ?: "Device"}: Connected"
+                    connectedDevice = activeDevice,
+                    targetDevice = activeDevice,
+                    statusMessage = "Target ${activeDevice.name ?: activeDevice.address}: Connected"
+                )
+            } else if (_uiState.value.targetDevice == null && _uiState.value.pairedDevices.isNotEmpty()) {
+                // Auto-select first paired device so user doesn't see "Target None"
+                val defaultTarget = _uiState.value.pairedDevices.first()
+                _uiState.value = _uiState.value.copy(
+                    targetDevice = defaultTarget,
+                    statusMessage = "Ready to connect: ${defaultTarget.name ?: defaultTarget.address}"
                 )
             }
         } catch (e: Exception) {
@@ -323,7 +365,19 @@ class BluetoothHidManager(private val context: Context) {
         val adapter = bluetoothAdapter ?: return
         try {
             val bonded = adapter.bondedDevices?.toList() ?: emptyList()
-            _uiState.value = _uiState.value.copy(pairedDevices = bonded)
+            val currentTarget = _uiState.value.targetDevice
+            val newTarget = if (currentTarget != null && bonded.any { it.address == currentTarget.address }) {
+                currentTarget
+            } else {
+                bonded.firstOrNull()
+            }
+            _uiState.value = _uiState.value.copy(
+                pairedDevices = bonded,
+                targetDevice = newTarget ?: currentTarget,
+                statusMessage = if (newTarget != null && _uiState.value.connectionState != BluetoothProfile.STATE_CONNECTED)
+                    "Paired device available: ${newTarget.name ?: newTarget.address}"
+                else _uiState.value.statusMessage
+            )
         } catch (e: Exception) {
             Log.w(TAG, "Cannot get bonded devices: ${e.message}")
         }
@@ -471,15 +525,19 @@ class BluetoothHidManager(private val context: Context) {
     }
 
     private fun buildKeyboardReport(): ByteArray {
-        val report = ByteArray(8)
-        report[0] = activeModifiers
-        report[1] = 0 // reserved
-        var idx = 2
-        for (k in pressedKeys) {
-            if (idx >= 8) break
-            report[idx++] = k
+        synchronized(this) {
+            keyboardReportBuffer[0] = activeModifiers
+            keyboardReportBuffer[1] = 0 // reserved
+            var idx = 2
+            for (k in pressedKeys) {
+                if (idx >= 8) break
+                keyboardReportBuffer[idx++] = k
+            }
+            while (idx < 8) {
+                keyboardReportBuffer[idx++] = 0
+            }
+            return keyboardReportBuffer
         }
-        return report
     }
 
     @SuppressLint("MissingPermission")
@@ -496,7 +554,7 @@ class BluetoothHidManager(private val context: Context) {
         }
     }
 
-    // --- MOUSE REPORTS ---
+    // --- MOUSE REPORTS (Zero Allocation - 1GB RAM optimized) ---
 
     @SuppressLint("MissingPermission")
     fun sendMouseMotion(buttons: Byte, dx: Byte, dy: Byte, wheel: Byte) {
@@ -505,11 +563,16 @@ class BluetoothHidManager(private val context: Context) {
         if (!_uiState.value.isHidActive) return
 
         lastMouseButtons = buttons
-        val report = byteArrayOf(buttons, dx, dy, wheel)
-        try {
-            dev.sendReport(target, HidConsts.REPORT_ID_MOUSE.toInt(), report)
-        } catch (e: Exception) {
-            Log.e(TAG, "sendMouseMotion failed", e)
+        synchronized(mouseReportBuffer) {
+            mouseReportBuffer[0] = buttons
+            mouseReportBuffer[1] = dx
+            mouseReportBuffer[2] = dy
+            mouseReportBuffer[3] = wheel
+            try {
+                dev.sendReport(target, HidConsts.REPORT_ID_MOUSE.toInt(), mouseReportBuffer)
+            } catch (e: Exception) {
+                Log.e(TAG, "sendMouseMotion failed", e)
+            }
         }
     }
 

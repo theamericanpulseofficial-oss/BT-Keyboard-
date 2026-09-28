@@ -69,6 +69,13 @@ class MainActivity : ComponentActivity() {
         hidManager = BluetoothHidManager(applicationContext)
         usbDetector = UsbMouseDetector(applicationContext)
 
+        // On Android Oreo+, set captured pointer listener directly on decorView
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.decorView.setOnCapturedPointerListener { _, event ->
+                handleCapturedPointer(event)
+            }
+        }
+
         setContent {
             BtKeyboardTheme {
                 MainScreen(
@@ -87,6 +94,9 @@ class MainActivity : ComponentActivity() {
 
     private fun requestMousePointerCapture() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.decorView.isFocusable = true
+            window.decorView.isFocusableInTouchMode = true
+            window.decorView.requestFocus()
             window.decorView.requestPointerCapture()
         }
         usbDetector.setPointerCaptureActive(true)
@@ -104,7 +114,44 @@ class MainActivity : ComponentActivity() {
         usbDetector.setPointerCaptureActive(hasCapture)
     }
 
-    // Intercept physical USB mouse relative motion and clicks via Pointer Capture
+    // Android Oreo+ official pointer capture callback: completely locks cursor and delivers direct relative deltas
+    private fun handleCapturedPointer(event: MotionEvent): Boolean {
+        if (hidManager.uiState.value.isHidActive) {
+            val dx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
+            } else {
+                0f
+            }
+            val dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
+            } else {
+                0f
+            }
+            val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            val buttons = event.buttonState
+
+            var buttonMask: Byte = 0
+            if ((buttons and MotionEvent.BUTTON_PRIMARY) != 0) {
+                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_LEFT.toInt()).toByte()
+            }
+            if ((buttons and MotionEvent.BUTTON_SECONDARY) != 0) {
+                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_RIGHT.toInt()).toByte()
+            }
+            if ((buttons and MotionEvent.BUTTON_TERTIARY) != 0) {
+                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_MIDDLE.toInt()).toByte()
+            }
+
+            val dxByte = dx.toInt().coerceIn(-127, 127).toByte()
+            val dyByte = dy.toInt().coerceIn(-127, 127).toByte()
+            val wheelByte = (vScroll * 1f).toInt().coerceIn(-127, 127).toByte()
+
+            hidManager.sendMouseMotion(buttonMask, dxByte, dyByte, wheelByte)
+            return true
+        }
+        return false
+    }
+
+    // Fallback: Intercept physical USB mouse relative motion and clicks if pointer capture not yet active
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         if (hidManager.uiState.value.isHidActive &&
             (event.source and InputDevice.SOURCE_CLASS_POINTER != 0 || event.isFromSource(InputDevice.SOURCE_MOUSE))
@@ -141,6 +188,25 @@ class MainActivity : ComponentActivity() {
             return true
         }
         return super.dispatchGenericMotionEvent(event)
+    }
+
+    // Intercept USB mouse touch events to prevent Phone A from clicking its own UI when active
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (hidManager.uiState.value.isHidActive && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            // Forward mouse click directly and prevent local phone A touch processing
+            val buttons = event.buttonState
+            var buttonMask: Byte = 0
+            if ((buttons and MotionEvent.BUTTON_PRIMARY) != 0 || event.action == MotionEvent.ACTION_DOWN) {
+                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_LEFT.toInt()).toByte()
+            }
+            if ((buttons and MotionEvent.BUTTON_SECONDARY) != 0) {
+                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_RIGHT.toInt()).toByte()
+            }
+            val finalMask = if (event.action == MotionEvent.ACTION_UP) 0.toByte() else buttonMask
+            hidManager.sendMouseMotion(finalMask, 0, 0, 0)
+            return true
+        }
+        return super.dispatchTouchEvent(event)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -267,9 +333,15 @@ fun MainScreen(
                         if (isConnected) {
                             hidManager.startForwarding()
                             onRequestPointerCapture()
+                        } else if (btState.targetDevice != null) {
+                            // Target device exists: initiate connect and engage forwarding
+                            hidManager.connectTargetDevice()
+                            hidManager.startForwarding()
+                            onRequestPointerCapture()
                         } else {
+                            showScanDialog = true
                             scope.launch {
-                                snackbarHostState.showSnackbar("Cannot start: Connect to a target Bluetooth device first!")
+                                snackbarHostState.showSnackbar("Please select or scan a target Bluetooth device first.")
                             }
                         }
                     },
