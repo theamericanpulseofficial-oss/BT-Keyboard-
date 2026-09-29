@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
@@ -79,6 +80,7 @@ fun StatusDashboard(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenFullscreenKeyboard: () -> Unit,
+    onOpenGamePad: () -> Unit = {},
     onShowLimitations: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -94,16 +96,16 @@ fun StatusDashboard(
             .padding(14.dp)
             .testTag("status_dashboard")
     ) {
-        // App Header: Title & Limitation Info Icon
+        // App Header: Title & Action Badges
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f, fill = false)) {
                 Text(
                     text = "BT Keyboard & Mouse",
-                    fontSize = 20.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary,
                     letterSpacing = 0.5.sp
@@ -115,22 +117,54 @@ fun StatusDashboard(
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // GAME PAD BUTTON
+                Surface(
+                    onClick = onOpenGamePad,
+                    shape = RoundedCornerShape(14.dp),
+                    color = AmberWarning.copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AmberWarning),
+                    modifier = Modifier.height(28.dp).testTag("open_gamepad_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Gamepad,
+                            contentDescription = "Game Pad",
+                            tint = AmberWarning,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "GAME PAD",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = AmberWarning
+                        )
+                    }
+                }
+
                 IconButton(
                     onClick = onShowLimitations,
-                    modifier = Modifier.testTag("limitations_info_button")
+                    modifier = Modifier.size(36.dp).testTag("limitations_info_button")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.HelpOutline,
                         contentDescription = "API Limitations Info",
-                        tint = CyanNeon
+                        tint = CyanNeon,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
-                // Global Mode Badge: 🟢 HID ACTIVE vs IDLE
+                // Global Mode Badge: 🟢 HID ACTIVE vs ⚪ IDLE (Single Row horizontal)
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(14.dp))
                         .background(
                             if (btState.isHidActive) GreenActive.copy(alpha = 0.2f)
                             else DarkSurfaceElevated
@@ -138,9 +172,9 @@ fun StatusDashboard(
                         .border(
                             1.dp,
                             if (btState.isHidActive) GreenActive else DarkBorder,
-                            RoundedCornerShape(16.dp)
+                            RoundedCornerShape(14.dp)
                         )
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                         .testTag("hid_mode_badge")
                 ) {
                     Row(
@@ -154,7 +188,7 @@ fun StatusDashboard(
                                 .background(if (btState.isHidActive) GreenActive else TextMuted)
                         )
                         Text(
-                            text = if (btState.isHidActive) "🟢 HID ACTIVE" else "⚪ IDLE",
+                            text = if (btState.isHidActive) "HID ACTIVE" else "IDLE",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (btState.isHidActive) GreenActive else TextSecondary
@@ -164,19 +198,19 @@ fun StatusDashboard(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Top Status Summary Grid: Bluetooth, Target, HID
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             StatusCard(
                 title = "Bluetooth",
                 value = if (btState.isBtEnabled) "ON" else "OFF",
                 valueColor = if (btState.isBtEnabled) GreenActive else RedAlert,
                 icon = Icons.Default.Bluetooth,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(0.9f)
             )
 
             StatusCard(
@@ -184,7 +218,7 @@ fun StatusDashboard(
                 value = targetName,
                 valueColor = if (btState.connectedDevice != null) GreenActive else if (btState.targetDevice != null) CyanNeon else TextSecondary,
                 icon = Icons.Default.TabletAndroid,
-                modifier = Modifier.weight(1.4f)
+                modifier = Modifier.weight(1.5f)
             )
 
             StatusCard(
@@ -205,52 +239,15 @@ fun StatusDashboard(
             )
         }
 
-        // Quick Paired Device Selector (if paired devices exist)
-        if (btState.pairedDevices.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "Paired:",
-                    fontSize = 11.sp,
-                    color = TextSecondary,
-                    fontWeight = FontWeight.Medium
-                )
-                btState.pairedDevices.take(3).forEach { dev ->
-                    val isSelected = btState.targetDevice?.address == dev.address
-                    Surface(
-                        onClick = onScanDevices,
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSelected) CyanNeon.copy(alpha = 0.2f) else DarkBg,
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isSelected) CyanNeon else DarkBorder
-                        )
-                    ) {
-                        Text(
-                            text = dev.name ?: dev.address.takeLast(5),
-                            fontSize = 10.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) CyanNeon else TextSecondary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Main Control Buttons: 2 Distinct, Roomy Rows (NO TEXT CLIPPING!)
-        // Row 1: [ 🔍 SCAN DEVICES ] and [ ⚡ CONNECT / DISCONNECT ]
+        // Row 1: [ 🔍 SCAN / SELECT ] and [ ⚡ CONNECT / DISCONNECT ]
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // SCAN DEVICES BUTTON
+            // SCAN / SELECT DEVICE BUTTON
             OutlinedButton(
                 onClick = onScanDevices,
                 shape = RoundedCornerShape(10.dp),
@@ -258,7 +255,7 @@ fun StatusDashboard(
                 border = androidx.compose.foundation.BorderStroke(1.dp, CyanNeon),
                 modifier = Modifier
                     .weight(1f)
-                    .height(44.dp)
+                    .height(46.dp)
                     .testTag("scan_devices_button")
             ) {
                 Icon(
@@ -267,7 +264,7 @@ fun StatusDashboard(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("SCAN DEVICES", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("SCAN / SELECT", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
 
             // CONNECT / DISCONNECT BUTTON
@@ -284,7 +281,7 @@ fun StatusDashboard(
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .height(44.dp)
+                    .height(46.dp)
                     .testTag("connect_button")
             ) {
                 Icon(
@@ -304,14 +301,15 @@ fun StatusDashboard(
         Spacer(modifier = Modifier.height(8.dp))
 
         // Row 2: Prominent [ ▶ START FORWARDING ] and [ ⏹ STOP ]
+        // Strictly enabled ONLY when connected!
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // START (ENGAGE HID FORWARDING)
+            // START (ENGAGE HID FORWARDING) - Strictly requires real connected Bluetooth HID device!
             Button(
                 onClick = onStart,
-                enabled = (isConnected || btState.targetDevice != null) && !btState.isHidActive,
+                enabled = isConnected && !btState.isHidActive,
                 shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = GreenActive,
@@ -548,10 +546,11 @@ fun StatusCard(
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = value,
-                fontSize = 12.sp,
+                fontSize = if (value.length > 10) 10.sp else 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = valueColor,
-                maxLines = 1
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
         }
     }

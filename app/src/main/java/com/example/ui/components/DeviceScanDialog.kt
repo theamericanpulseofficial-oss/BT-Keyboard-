@@ -60,10 +60,12 @@ fun DeviceScanDialog(
     pairedDevices: List<BluetoothDevice>,
     discoveredDevices: List<BluetoothDevice>,
     selectedDevice: BluetoothDevice?,
+    connectedDevice: BluetoothDevice?,
     isScanning: Boolean,
     onStartScan: () -> Unit,
     onStopScan: () -> Unit,
     onSelectDevice: (BluetoothDevice) -> Unit,
+    onConnectDevice: (BluetoothDevice) -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -188,8 +190,10 @@ fun DeviceScanDialog(
                             DeviceItemCard(
                                 device = device,
                                 isSelected = selectedDevice?.address == device.address,
+                                isConnected = connectedDevice?.address == device.address,
                                 isPaired = true,
-                                onClick = { onSelectDevice(device) }
+                                onClick = { onSelectDevice(device) },
+                                onConnectClick = { onConnectDevice(device) }
                             )
                         }
                     }
@@ -210,8 +214,10 @@ fun DeviceScanDialog(
                             DeviceItemCard(
                                 device = device,
                                 isSelected = selectedDevice?.address == device.address,
+                                isConnected = connectedDevice?.address == device.address,
                                 isPaired = false,
-                                onClick = { onSelectDevice(device) }
+                                onClick = { onSelectDevice(device) },
+                                onConnectClick = { onConnectDevice(device) }
                             )
                         }
                     }
@@ -274,8 +280,10 @@ fun DeviceScanDialog(
 fun DeviceItemCard(
     device: BluetoothDevice,
     isSelected: Boolean,
+    isConnected: Boolean,
     isPaired: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onConnectClick: () -> Unit
 ) {
     val devName = try {
         device.name ?: "Unknown Device"
@@ -287,10 +295,10 @@ fun DeviceItemCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(if (isSelected) CyanNeon.copy(alpha = 0.15f) else DarkBg)
+            .background(if (isConnected) GreenActive.copy(alpha = 0.15f) else if (isSelected) CyanNeon.copy(alpha = 0.12f) else DarkBg)
             .border(
                 1.dp,
-                if (isSelected) CyanNeon else DarkBorder,
+                if (isConnected) GreenActive else if (isSelected) CyanNeon else DarkBorder,
                 RoundedCornerShape(8.dp)
             )
             .clickable(onClick = onClick)
@@ -303,12 +311,13 @@ fun DeviceItemCard(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = Icons.Default.Devices,
+                    imageVector = if (isConnected) Icons.Default.Bluetooth else Icons.Default.Devices,
                     contentDescription = null,
-                    tint = if (isSelected) CyanNeon else TextSecondary,
+                    tint = if (isConnected) GreenActive else if (isSelected) CyanNeon else TextSecondary,
                     modifier = Modifier.size(20.dp)
                 )
                 Column {
@@ -316,24 +325,45 @@ fun DeviceItemCard(
                         text = devName,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (isSelected) CyanNeon else TextPrimary
+                        color = if (isConnected) GreenActive else if (isSelected) CyanNeon else TextPrimary,
+                        maxLines = 1
                     )
                     Text(
-                        text = "${device.address} ${if (isPaired) "• Paired" else "• Discovered"}",
+                        text = "${device.address} ${if (isConnected) "• CONNECTED" else if (isPaired) "• Paired" else "• Discovered"}",
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = TextMuted
+                        color = if (isConnected) GreenActive else TextMuted
                     )
                 }
             }
 
-            if (isSelected) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "Selected",
-                    tint = CyanNeon,
-                    modifier = Modifier.size(18.dp)
-                )
+            // Quick Connect Button or Connected Status
+            if (isConnected) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = GreenActive.copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GreenActive)
+                ) {
+                    Text(
+                        text = "CONNECTED",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = GreenActive,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            } else {
+                Button(
+                    onClick = onConnectClick,
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyanNeon,
+                        contentColor = DarkBg
+                    ),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("CONNECT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

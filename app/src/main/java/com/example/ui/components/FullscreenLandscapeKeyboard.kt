@@ -2,8 +2,15 @@ package com.example.ui.components
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.os.Build
 import android.view.HapticFeedbackConstants
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import androidx.activity.compose.BackHandler
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -68,8 +75,22 @@ fun FullscreenLandscapeKeyboard(
     DisposableEffect(Unit) {
         val originalOrientation = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
+        // Immersive Sticky: Hide Status Bar (time/battery) and Navigation Bar (3 buttons)
+        val window = activity?.window
+        if (window != null) {
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        }
+
         onDispose {
             activity?.requestedOrientation = originalOrientation
+            val win = activity?.window
+            if (win != null) {
+                val controller = WindowCompat.getInsetsController(win, win.decorView)
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
@@ -84,7 +105,7 @@ fun FullscreenLandscapeKeyboard(
     var isCapsLockActive by remember { mutableStateOf(false) }
     var isFnActive by remember { mutableStateOf(false) }
 
-    val keyAction: (KeyDefinition) -> Unit = { key ->
+    val onKeyDownAction: (KeyDefinition) -> Unit = { key ->
         when (key.id) {
             "CAPS" -> {
                 isCapsLockActive = !isCapsLockActive
@@ -111,12 +132,18 @@ fun FullscreenLandscapeKeyboard(
             }
             else -> {
                 if (key.usageCode != HidConsts.KEY_NONE) {
-                    hidManager.sendKeyPress(key.usageCode)
-                    if (isShiftActive && key.keyType == KeyType.NORMAL) {
-                        isShiftActive = false
-                        hidManager.setModifier(HidConsts.MOD_LEFT_SHIFT, false)
-                    }
+                    hidManager.sendKeyDown(key.usageCode)
                 }
+            }
+        }
+    }
+
+    val onKeyUpAction: (KeyDefinition) -> Unit = { key ->
+        if (key.keyType != KeyType.MODIFIER && key.id != "FN" && key.usageCode != HidConsts.KEY_NONE) {
+            hidManager.sendKeyUp(key.usageCode)
+            if (isShiftActive && key.keyType == KeyType.NORMAL) {
+                isShiftActive = false
+                hidManager.setModifier(HidConsts.MOD_LEFT_SHIFT, false)
             }
         }
     }
@@ -240,7 +267,8 @@ fun FullscreenLandscapeKeyboard(
                     isAltActive = isAltActive,
                     isWinActive = isWinActive,
                     isFnActive = isFnActive,
-                    onKeyAction = keyAction,
+                    onKeyDown = onKeyDownAction,
+                    onKeyUp = onKeyUpAction,
                     heightDp = 38
                 )
 
@@ -253,7 +281,8 @@ fun FullscreenLandscapeKeyboard(
                     isAltActive = isAltActive,
                     isWinActive = isWinActive,
                     isFnActive = isFnActive,
-                    onKeyAction = keyAction,
+                    onKeyDown = onKeyDownAction,
+                    onKeyUp = onKeyUpAction,
                     heightDp = 44
                 )
 
@@ -266,7 +295,8 @@ fun FullscreenLandscapeKeyboard(
                     isAltActive = isAltActive,
                     isWinActive = isWinActive,
                     isFnActive = isFnActive,
-                    onKeyAction = keyAction,
+                    onKeyDown = onKeyDownAction,
+                    onKeyUp = onKeyUpAction,
                     heightDp = 44
                 )
 
@@ -279,7 +309,8 @@ fun FullscreenLandscapeKeyboard(
                     isAltActive = isAltActive,
                     isWinActive = isWinActive,
                     isFnActive = isFnActive,
-                    onKeyAction = keyAction,
+                    onKeyDown = onKeyDownAction,
+                    onKeyUp = onKeyUpAction,
                     heightDp = 44
                 )
 
@@ -292,7 +323,8 @@ fun FullscreenLandscapeKeyboard(
                     isAltActive = isAltActive,
                     isWinActive = isWinActive,
                     isFnActive = isFnActive,
-                    onKeyAction = keyAction,
+                    onKeyDown = onKeyDownAction,
+                    onKeyUp = onKeyUpAction,
                     heightDp = 44
                 )
 
@@ -305,7 +337,8 @@ fun FullscreenLandscapeKeyboard(
                     isAltActive = isAltActive,
                     isWinActive = isWinActive,
                     isFnActive = isFnActive,
-                    onKeyAction = keyAction,
+                    onKeyDown = onKeyDownAction,
+                    onKeyUp = onKeyUpAction,
                     heightDp = 44
                 )
             }

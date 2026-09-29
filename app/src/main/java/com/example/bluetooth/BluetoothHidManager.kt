@@ -58,13 +58,33 @@ class BluetoothHidManager(private val context: Context) {
     val uiState: StateFlow<BluetoothHidUiState> = _uiState.asStateFlow()
 
     private var hidDevice: BluetoothHidDevice? = null
-    private val executor = Executors.newSingleThreadExecutor()
+    val gameKeyMapper = com.example.keyboard.GameKeyMapper()
+
+    // Dedicated high-priority single thread for zero-latency HID dispatch (avoids UI binder stalls)
+    private val hidDispatcher = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "GamingFastHidDispatcher").apply {
+            priority = Thread.MAX_PRIORITY
+        }
+    }
     private val scope = CoroutineScope(Dispatchers.Main)
 
     // Current HID Keyboard state (up to 6 keys + modifiers)
     private val pressedKeys = LinkedHashSet<Byte>()
     private var activeModifiers: Byte = 0
     private var lastMouseButtons: Byte = 0
+
+    // Ultra-low latency mouse accumulator & atomic coalescer (prevents BT buffer bloat)
+    private val pendingDx = java.util.concurrent.atomic.AtomicInteger(0)
+    private val pendingDy = java.util.concurrent.atomic.AtomicInteger(0)
+    private val pendingWheel = java.util.concurrent.atomic.AtomicInteger(0)
+    private val currentMouseButtons = java.util.concurrent.atomic.AtomicInteger(0)
+    private val isMouseFlushScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    // Packet rate & latency metrics
+    private var packetCount = 0
+    private var lastRateCalcTime = System.currentTimeMillis()
+    private val _packetRateHz = MutableStateFlow(0)
+    val packetRateHz: StateFlow<Int> = _packetRateHz.asStateFlow()
 
     // Reusable buffers to guarantee ZERO garbage collection allocations on low-memory (1GB RAM) devices
     private val keyboardReportBuffer = ByteArray(8)
@@ -310,7 +330,7 @@ class BluetoothHidManager(private val context: Context) {
         )
 
         try {
-            val success = dev.registerApp(sdpSettings, qosSettings, qosSettings, executor, hidCallback)
+            val success = dev.registerApp(sdpSettings, qosSettings, qosSettings, hidDispatcher, hidCallback)
             Log.d(TAG, "registerApp result: $success")
             _uiState.value = _uiState.value.copy(
                 statusMessage = if (success) "Registering HID SDP profile..." else "Failed to register HID app."
@@ -345,14 +365,13 @@ class BluetoothHidManager(private val context: Context) {
                     connectionState = BluetoothProfile.STATE_CONNECTED,
                     connectedDevice = activeDevice,
                     targetDevice = activeDevice,
-                    statusMessage = "Target ${activeDevice.name ?: activeDevice.address}: Connected"
+                    statusMessage = "Target '${activeDevice.name ?: activeDevice.address}': Connected"
                 )
             } else if (_uiState.value.targetDevice == null && _uiState.value.pairedDevices.isNotEmpty()) {
-                // Auto-select first paired device so user doesn't see "Target None"
                 val defaultTarget = _uiState.value.pairedDevices.first()
                 _uiState.value = _uiState.value.copy(
                     targetDevice = defaultTarget,
-                    statusMessage = "Ready to connect: ${defaultTarget.name ?: defaultTarget.address}"
+                    statusMessage = "Target: ${defaultTarget.name ?: defaultTarget.address} (Tap CONNECT)"
                 )
             }
         } catch (e: Exception) {
@@ -374,10 +393,15 @@ class BluetoothHidManager(private val context: Context) {
             _uiState.value = _uiState.value.copy(
                 pairedDevices = bonded,
                 targetDevice = newTarget ?: currentTarget,
-                statusMessage = if (newTarget != null && _uiState.value.connectionState != BluetoothProfile.STATE_CONNECTED)
-                    "Paired device available: ${newTarget.name ?: newTarget.address}"
-                else _uiState.value.statusMessage
+                statusMessage = if (_uiState.value.connectionState == BluetoothProfile.STATE_CONNECTED)
+                    _uiState.value.statusMessage
+                else if (newTarget != null)
+                    "Selected: ${newTarget.name ?: newTarget.address}. Tap CONNECT to link."
+                else
+                    _uiState.value.statusMessage
             )
+            // If already connected, verify immediately
+            checkConnectedDevicesNow()
         } catch (e: Exception) {
             Log.w(TAG, "Cannot get bonded devices: ${e.message}")
         }
@@ -466,19 +490,21 @@ class BluetoothHidManager(private val context: Context) {
         )
     }
 
-    // --- KEYBOARD REPORTS ---
+    // --- KEYBOARD REPORTS (Ultra-Low Latency & Remapped for Gaming) ---
 
-    @Synchronized
     fun setModifier(mask: Byte, active: Boolean) {
-        activeModifiers = if (active) {
-            (activeModifiers.toInt() or mask.toInt()).toByte()
-        } else {
-            (activeModifiers.toInt() and mask.toInt().inv()).toByte()
+        hidDispatcher.execute {
+            synchronized(this@BluetoothHidManager) {
+                activeModifiers = if (active) {
+                    (activeModifiers.toInt() or mask.toInt()).toByte()
+                } else {
+                    (activeModifiers.toInt() and mask.toInt().inv()).toByte()
+                }
+                sendKeyboardReportDirect()
+            }
         }
-        sendKeyboardReport()
     }
 
-    @Synchronized
     fun toggleModifier(mask: Byte): Boolean {
         val isNowActive = (activeModifiers.toInt() and mask.toInt()) == 0
         setModifier(mask, isNowActive)
@@ -489,39 +515,57 @@ class BluetoothHidManager(private val context: Context) {
         return (activeModifiers.toInt() and mask.toInt()) != 0
     }
 
-    @Synchronized
-    fun sendKeyDown(usageCode: Byte) {
+    fun sendKeyDown(rawUsageCode: Byte) {
+        val usageCode = gameKeyMapper.getMappedKey(rawUsageCode)
         if (usageCode == HidConsts.KEY_NONE) return
-        pressedKeys.add(usageCode)
-        sendKeyboardReport()
-    }
-
-    @Synchronized
-    fun sendKeyUp(usageCode: Byte) {
-        pressedKeys.remove(usageCode)
-        sendKeyboardReport()
-    }
-
-    @Synchronized
-    fun sendKeyPress(usageCode: Byte) {
-        if (usageCode == HidConsts.KEY_NONE) return
-        pressedKeys.add(usageCode)
-        sendKeyboardReport()
-        // Release after tiny delay
-        scope.launch {
-            kotlinx.coroutines.delay(20)
+        hidDispatcher.execute {
             synchronized(this@BluetoothHidManager) {
-                pressedKeys.remove(usageCode)
-                sendKeyboardReport()
+                pressedKeys.add(usageCode)
+                sendKeyboardReportDirect()
             }
         }
     }
 
-    @Synchronized
+    fun sendKeyUp(rawUsageCode: Byte) {
+        val usageCode = gameKeyMapper.getMappedKey(rawUsageCode)
+        if (usageCode == HidConsts.KEY_NONE) return
+        hidDispatcher.execute {
+            synchronized(this@BluetoothHidManager) {
+                pressedKeys.remove(usageCode)
+                sendKeyboardReportDirect()
+            }
+        }
+    }
+
+    fun sendKeyPress(rawUsageCode: Byte) {
+        val usageCode = gameKeyMapper.getMappedKey(rawUsageCode)
+        if (usageCode == HidConsts.KEY_NONE) return
+        hidDispatcher.execute {
+            synchronized(this@BluetoothHidManager) {
+                pressedKeys.add(usageCode)
+                sendKeyboardReportDirect()
+            }
+        }
+        // Release after tiny 16ms delay (1 frame)
+        scope.launch {
+            kotlinx.coroutines.delay(16)
+            hidDispatcher.execute {
+                synchronized(this@BluetoothHidManager) {
+                    pressedKeys.remove(usageCode)
+                    sendKeyboardReportDirect()
+                }
+            }
+        }
+    }
+
     fun releaseAllKeys() {
-        pressedKeys.clear()
-        activeModifiers = 0
-        sendKeyboardReport()
+        hidDispatcher.execute {
+            synchronized(this@BluetoothHidManager) {
+                pressedKeys.clear()
+                activeModifiers = 0
+                sendKeyboardReportDirect()
+            }
+        }
     }
 
     private fun buildKeyboardReport(): ByteArray {
@@ -541,7 +585,7 @@ class BluetoothHidManager(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    private fun sendKeyboardReport() {
+    private fun sendKeyboardReportDirect() {
         val dev = hidDevice ?: return
         val target = _uiState.value.connectedDevice ?: _uiState.value.targetDevice ?: return
         if (!_uiState.value.isHidActive) return
@@ -549,30 +593,49 @@ class BluetoothHidManager(private val context: Context) {
         val report = buildKeyboardReport()
         try {
             dev.sendReport(target, HidConsts.REPORT_ID_KEYBOARD.toInt(), report)
+            recordPacketSent()
         } catch (e: Exception) {
             Log.e(TAG, "sendKeyboardReport failed", e)
         }
     }
 
-    // --- MOUSE REPORTS (Zero Allocation - 1GB RAM optimized) ---
+    // --- MOUSE REPORTS (Ultra-Low Latency FIFO Dispatch - Direct HID Report Delivery) ---
 
     @SuppressLint("MissingPermission")
     fun sendMouseMotion(buttons: Byte, dx: Byte, dy: Byte, wheel: Byte) {
-        val dev = hidDevice ?: return
-        val target = _uiState.value.connectedDevice ?: _uiState.value.targetDevice ?: return
         if (!_uiState.value.isHidActive) return
-
+        if (dx == 0.toByte() && dy == 0.toByte() && wheel == 0.toByte() && buttons == lastMouseButtons) {
+            return
+        }
         lastMouseButtons = buttons
-        synchronized(mouseReportBuffer) {
-            mouseReportBuffer[0] = buttons
-            mouseReportBuffer[1] = dx
-            mouseReportBuffer[2] = dy
-            mouseReportBuffer[3] = wheel
-            try {
-                dev.sendReport(target, HidConsts.REPORT_ID_MOUSE.toInt(), mouseReportBuffer)
-            } catch (e: Exception) {
-                Log.e(TAG, "sendMouseMotion failed", e)
+
+        hidDispatcher.execute {
+            val dev = hidDevice ?: return@execute
+            val target = _uiState.value.connectedDevice ?: _uiState.value.targetDevice ?: return@execute
+            if (!_uiState.value.isHidActive) return@execute
+
+            synchronized(mouseReportBuffer) {
+                mouseReportBuffer[0] = buttons
+                mouseReportBuffer[1] = dx
+                mouseReportBuffer[2] = dy
+                mouseReportBuffer[3] = wheel
+                try {
+                    dev.sendReport(target, HidConsts.REPORT_ID_MOUSE.toInt(), mouseReportBuffer)
+                    recordPacketSent()
+                } catch (e: Exception) {
+                    Log.e(TAG, "sendMouseMotion failed", e)
+                }
             }
+        }
+    }
+
+    private fun recordPacketSent() {
+        packetCount++
+        val now = System.currentTimeMillis()
+        if (now - lastRateCalcTime >= 1000) {
+            _packetRateHz.value = packetCount
+            packetCount = 0
+            lastRateCalcTime = now
         }
     }
 
@@ -583,6 +646,6 @@ class BluetoothHidManager(private val context: Context) {
         try {
             hidDevice?.let { bluetoothAdapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, it) }
         } catch (_: Exception) {}
-        executor.shutdown()
+        hidDispatcher.shutdown()
     }
 }

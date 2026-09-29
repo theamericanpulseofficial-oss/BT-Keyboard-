@@ -138,8 +138,8 @@ fun VirtualKeyboard(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Single Laptop Keyboard - Rows rendered cleanly without horizontal scroll
-        val keyAction: (KeyDefinition) -> Unit = { key ->
+        // Single Laptop Keyboard - Immediate Hold-to-Press for Gaming
+        val onKeyDownAction: (KeyDefinition) -> Unit = { key ->
             when (key.id) {
                 "CAPS" -> {
                     isCapsLockActive = !isCapsLockActive
@@ -166,12 +166,18 @@ fun VirtualKeyboard(
                 }
                 else -> {
                     if (key.usageCode != HidConsts.KEY_NONE) {
-                        hidManager.sendKeyPress(key.usageCode)
-                        if (isShiftActive && key.keyType == KeyType.NORMAL) {
-                            isShiftActive = false
-                            hidManager.setModifier(HidConsts.MOD_LEFT_SHIFT, false)
-                        }
+                        hidManager.sendKeyDown(key.usageCode)
                     }
+                }
+            }
+        }
+
+        val onKeyUpAction: (KeyDefinition) -> Unit = { key ->
+            if (key.keyType != KeyType.MODIFIER && key.id != "FN" && key.usageCode != HidConsts.KEY_NONE) {
+                hidManager.sendKeyUp(key.usageCode)
+                if (isShiftActive && key.keyType == KeyType.NORMAL) {
+                    isShiftActive = false
+                    hidManager.setModifier(HidConsts.MOD_LEFT_SHIFT, false)
                 }
             }
         }
@@ -185,7 +191,8 @@ fun VirtualKeyboard(
             isAltActive = isAltActive,
             isWinActive = isWinActive,
             isFnActive = isFnActive,
-            onKeyAction = keyAction,
+            onKeyDown = onKeyDownAction,
+            onKeyUp = onKeyUpAction,
             heightDp = 28
         )
 
@@ -200,7 +207,8 @@ fun VirtualKeyboard(
             isAltActive = isAltActive,
             isWinActive = isWinActive,
             isFnActive = isFnActive,
-            onKeyAction = keyAction,
+            onKeyDown = onKeyDownAction,
+            onKeyUp = onKeyUpAction,
             heightDp = 34
         )
 
@@ -215,7 +223,8 @@ fun VirtualKeyboard(
             isAltActive = isAltActive,
             isWinActive = isWinActive,
             isFnActive = isFnActive,
-            onKeyAction = keyAction,
+            onKeyDown = onKeyDownAction,
+            onKeyUp = onKeyUpAction,
             heightDp = 34
         )
 
@@ -230,7 +239,8 @@ fun VirtualKeyboard(
             isAltActive = isAltActive,
             isWinActive = isWinActive,
             isFnActive = isFnActive,
-            onKeyAction = keyAction,
+            onKeyDown = onKeyDownAction,
+            onKeyUp = onKeyUpAction,
             heightDp = 34
         )
 
@@ -245,7 +255,8 @@ fun VirtualKeyboard(
             isAltActive = isAltActive,
             isWinActive = isWinActive,
             isFnActive = isFnActive,
-            onKeyAction = keyAction,
+            onKeyDown = onKeyDownAction,
+            onKeyUp = onKeyUpAction,
             heightDp = 34
         )
 
@@ -260,7 +271,8 @@ fun VirtualKeyboard(
             isAltActive = isAltActive,
             isWinActive = isWinActive,
             isFnActive = isFnActive,
-            onKeyAction = keyAction,
+            onKeyDown = onKeyDownAction,
+            onKeyUp = onKeyUpAction,
             heightDp = 34
         )
     }
@@ -275,7 +287,8 @@ fun LaptopKeyRow(
     isAltActive: Boolean,
     isWinActive: Boolean,
     isFnActive: Boolean,
-    onKeyAction: (KeyDefinition) -> Unit,
+    onKeyDown: (KeyDefinition) -> Unit,
+    onKeyUp: (KeyDefinition) -> Unit,
     heightDp: Int = 34
 ) {
     Row(
@@ -298,7 +311,8 @@ fun LaptopKeyRow(
                 isShiftActive = isShiftActive,
                 isCapsLockActive = isCapsLockActive,
                 isModifierOn = isModifierOn,
-                onClick = { onKeyAction(key) },
+                onKeyDown = { onKeyDown(key) },
+                onKeyUp = { onKeyUp(key) },
                 modifier = Modifier
                     .weight(key.weight)
                     .height(heightDp.dp)
@@ -313,7 +327,8 @@ fun LaptopKeyButton(
     isShiftActive: Boolean,
     isCapsLockActive: Boolean,
     isModifierOn: Boolean,
-    onClick: () -> Unit,
+    onKeyDown: () -> Unit,
+    onKeyUp: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val view = LocalView.current
@@ -362,10 +377,11 @@ fun LaptopKeyButton(
                     onPress = {
                         isPressed = true
                         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        onKeyDown()
                         tryAwaitRelease()
                         isPressed = false
-                    },
-                    onTap = { onClick() }
+                        onKeyUp()
+                    }
                 )
             }
             .testTag("key_${key.id}"),

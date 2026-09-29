@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.PointerIcon
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -48,6 +49,7 @@ import com.example.bluetooth.HidConsts
 import com.example.keyboard.AndroidKeyToHid
 import com.example.ui.components.DeviceScanDialog
 import com.example.ui.components.FullscreenLandscapeKeyboard
+import com.example.ui.components.GamingModeOverlay
 import com.example.ui.components.LimitationsInfoDialog
 import com.example.ui.components.MouseCaptureOverlay
 import com.example.ui.components.StatusDashboard
@@ -61,6 +63,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var hidManager: BluetoothHidManager
     private lateinit var usbDetector: UsbMouseDetector
+    private var lastMouseX = Float.NaN
+    private var lastMouseY = Float.NaN
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,6 +103,9 @@ class MainActivity : ComponentActivity() {
             window.decorView.requestFocus()
             window.decorView.requestPointerCapture()
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            window.decorView.pointerIcon = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
+        }
         usbDetector.setPointerCaptureActive(true)
     }
 
@@ -106,12 +113,38 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             window.decorView.releasePointerCapture()
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            window.decorView.pointerIcon = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_DEFAULT)
+        }
         usbDetector.setPointerCaptureActive(false)
+        lastMouseX = Float.NaN
+        lastMouseY = Float.NaN
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && hidManager.uiState.value.isHidActive) {
+            requestMousePointerCapture()
+        }
     }
 
     override fun onPointerCaptureChanged(hasCapture: Boolean) {
         super.onPointerCaptureChanged(hasCapture)
         usbDetector.setPointerCaptureActive(hasCapture)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            window.decorView.pointerIcon = if (hidManager.uiState.value.isHidActive) {
+                PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
+            } else {
+                PointerIcon.getSystemIcon(this, PointerIcon.TYPE_DEFAULT)
+            }
+        }
+        if (!hasCapture && hidManager.uiState.value.isHidActive) {
+            window.decorView.post {
+                if (hidManager.uiState.value.isHidActive) {
+                    requestMousePointerCapture()
+                }
+            }
+        }
     }
 
     // Android Oreo+ official pointer capture callback: completely locks cursor and delivers direct relative deltas
@@ -151,21 +184,38 @@ class MainActivity : ComponentActivity() {
         return false
     }
 
-    // Fallback: Intercept physical USB mouse relative motion and clicks if pointer capture not yet active
+    // Intercept physical USB mouse relative motion and clicks: ensures mouse never moves on Phone A
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         if (hidManager.uiState.value.isHidActive &&
             (event.source and InputDevice.SOURCE_CLASS_POINTER != 0 || event.isFromSource(InputDevice.SOURCE_MOUSE))
         ) {
-            val dx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !window.decorView.hasPointerCapture()) {
+                requestMousePointerCapture()
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                window.decorView.pointerIcon = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
+            }
+
+            var dx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
             } else {
                 0f
             }
-            val dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            var dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
             } else {
                 0f
             }
+
+            if (dx == 0f && dy == 0f) {
+                if (!lastMouseX.isNaN() && !lastMouseY.isNaN()) {
+                    dx = event.x - lastMouseX
+                    dy = event.y - lastMouseY
+                }
+                lastMouseX = event.x
+                lastMouseY = event.y
+            }
+
             val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
             val buttons = event.buttonState
 
@@ -193,6 +243,13 @@ class MainActivity : ComponentActivity() {
     // Intercept USB mouse touch events to prevent Phone A from clicking its own UI when active
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (hidManager.uiState.value.isHidActive && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !window.decorView.hasPointerCapture()) {
+                requestMousePointerCapture()
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                window.decorView.pointerIcon = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
+            }
+
             // Forward mouse click directly and prevent local phone A touch processing
             val buttons = event.buttonState
             var buttonMask: Byte = 0
@@ -202,8 +259,35 @@ class MainActivity : ComponentActivity() {
             if ((buttons and MotionEvent.BUTTON_SECONDARY) != 0) {
                 buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_RIGHT.toInt()).toByte()
             }
+            if ((buttons and MotionEvent.BUTTON_TERTIARY) != 0) {
+                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_MIDDLE.toInt()).toByte()
+            }
             val finalMask = if (event.action == MotionEvent.ACTION_UP) 0.toByte() else buttonMask
-            hidManager.sendMouseMotion(finalMask, 0, 0, 0)
+
+            var dx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
+            } else {
+                0f
+            }
+            var dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
+            } else {
+                0f
+            }
+
+            if (dx == 0f && dy == 0f) {
+                if (!lastMouseX.isNaN() && !lastMouseY.isNaN()) {
+                    dx = event.x - lastMouseX
+                    dy = event.y - lastMouseY
+                }
+                lastMouseX = event.x
+                lastMouseY = event.y
+            }
+
+            val dxByte = dx.toInt().coerceIn(-127, 127).toByte()
+            val dyByte = dy.toInt().coerceIn(-127, 127).toByte()
+
+            hidManager.sendMouseMotion(finalMask, dxByte, dyByte, 0)
             return true
         }
         return super.dispatchTouchEvent(event)
@@ -260,6 +344,7 @@ fun MainScreen(
     var showScanDialog by remember { mutableStateOf(false) }
     var showLimitationsDialog by remember { mutableStateOf(false) }
     var showFullscreenKeyboard by remember { mutableStateOf(false) }
+    var showGamePadOverlay by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -333,15 +418,11 @@ fun MainScreen(
                         if (isConnected) {
                             hidManager.startForwarding()
                             onRequestPointerCapture()
-                        } else if (btState.targetDevice != null) {
-                            // Target device exists: initiate connect and engage forwarding
-                            hidManager.connectTargetDevice()
-                            hidManager.startForwarding()
-                            onRequestPointerCapture()
                         } else {
-                            showScanDialog = true
+                            // Do NOT allow start without a real connection
                             scope.launch {
-                                snackbarHostState.showSnackbar("Please select or scan a target Bluetooth device first.")
+                                val devName = btState.targetDevice?.name ?: "target device"
+                                snackbarHostState.showSnackbar("Cannot start: Please connect to '$devName' first via the CONNECT button.")
                             }
                         }
                     },
@@ -351,6 +432,9 @@ fun MainScreen(
                     },
                     onOpenFullscreenKeyboard = {
                         showFullscreenKeyboard = true
+                    },
+                    onOpenGamePad = {
+                        showGamePadOverlay = true
                     },
                     onShowLimitations = { showLimitationsDialog = true }
                 )
@@ -384,10 +468,14 @@ fun MainScreen(
                 pairedDevices = btState.pairedDevices,
                 discoveredDevices = btState.discoveredDevices,
                 selectedDevice = btState.targetDevice,
+                connectedDevice = btState.connectedDevice,
                 isScanning = btState.isScanning,
                 onStartScan = { hidManager.startDiscovery() },
                 onStopScan = { hidManager.stopDiscovery() },
                 onSelectDevice = { dev ->
+                    hidManager.selectTargetDevice(dev)
+                },
+                onConnectDevice = { dev ->
                     hidManager.selectTargetDevice(dev)
                     hidManager.connectTargetDevice(dev)
                     showScanDialog = false
@@ -408,6 +496,17 @@ fun MainScreen(
                 hidManager = hidManager,
                 isHidActive = btState.isHidActive,
                 onClose = { showFullscreenKeyboard = false }
+            )
+        }
+
+        // Dedicated Game Pad Mode Overlay (Runs separately on request)
+        if (showGamePadOverlay) {
+            GamingModeOverlay(
+                hidManager = hidManager,
+                usbState = usbState,
+                isHidActive = btState.isHidActive,
+                onRequestPointerCapture = onRequestPointerCapture,
+                onClose = { showGamePadOverlay = false }
             )
         }
     }
