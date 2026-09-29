@@ -119,36 +119,8 @@ fun StatusDashboard(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // GAME PAD BUTTON
-                Surface(
-                    onClick = onOpenGamePad,
-                    shape = RoundedCornerShape(14.dp),
-                    color = AmberWarning.copy(alpha = 0.2f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, AmberWarning),
-                    modifier = Modifier.height(28.dp).testTag("open_gamepad_button")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Gamepad,
-                            contentDescription = "Game Pad",
-                            tint = AmberWarning,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = "GAME PAD",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = AmberWarning
-                        )
-                    }
-                }
-
                 IconButton(
                     onClick = onShowLimitations,
                     modifier = Modifier.size(36.dp).testTag("limitations_info_button")
@@ -504,6 +476,58 @@ fun StatusDashboard(
                     text = btState.errorMessage,
                     fontSize = 10.sp,
                     color = RedAlert
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Dedicated Game Pad Launcher (Deliberate tap only - never triggers by mistake)
+        Surface(
+            onClick = onOpenGamePad,
+            shape = RoundedCornerShape(8.dp),
+            color = AmberWarning.copy(alpha = 0.12f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, AmberWarning.copy(alpha = 0.5f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("open_gamepad_card")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Gamepad,
+                        contentDescription = null,
+                        tint = AmberWarning,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "🎮 OPTIONAL GAME PAD MODE",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AmberWarning
+                        )
+                        Text(
+                            text = "Touch D-Pad controls for mobile gaming (Tap to open)",
+                            fontSize = 9.sp,
+                            color = TextMuted
+                        )
+                    }
+                }
+                Text(
+                    text = "OPEN >",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AmberWarning
                 )
             }
         }

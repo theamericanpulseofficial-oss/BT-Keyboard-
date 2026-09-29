@@ -65,6 +65,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var usbDetector: UsbMouseDetector
     private var lastMouseX = Float.NaN
     private var lastMouseY = Float.NaN
+    private var mouseAccumulatorX = 0f
+    private var mouseAccumulatorY = 0f
+    private var lastSentButtons: Byte = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -119,6 +122,9 @@ class MainActivity : ComponentActivity() {
         usbDetector.setPointerCaptureActive(false)
         lastMouseX = Float.NaN
         lastMouseY = Float.NaN
+        mouseAccumulatorX = 0f
+        mouseAccumulatorY = 0f
+        lastSentButtons = 0
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -147,154 +153,127 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Android Oreo+ official pointer capture callback: completely locks cursor and delivers direct relative deltas
-    private fun handleCapturedPointer(event: MotionEvent): Boolean {
-        if (hidManager.uiState.value.isHidActive) {
-            val dx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
-            } else {
-                0f
-            }
-            val dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
-            } else {
-                0f
-            }
-            val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-            val buttons = event.buttonState
-
-            var buttonMask: Byte = 0
-            if ((buttons and MotionEvent.BUTTON_PRIMARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_LEFT.toInt()).toByte()
-            }
-            if ((buttons and MotionEvent.BUTTON_SECONDARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_RIGHT.toInt()).toByte()
-            }
-            if ((buttons and MotionEvent.BUTTON_TERTIARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_MIDDLE.toInt()).toByte()
-            }
-
-            val dxByte = dx.toInt().coerceIn(-127, 127).toByte()
-            val dyByte = dy.toInt().coerceIn(-127, 127).toByte()
-            val wheelByte = (vScroll * 1f).toInt().coerceIn(-127, 127).toByte()
-
-            hidManager.sendMouseMotion(buttonMask, dxByte, dyByte, wheelByte)
-            return true
-        }
-        return false
+    private fun isMouseEvent(event: MotionEvent): Boolean {
+        val src = event.source
+        return (src and InputDevice.SOURCE_MOUSE != 0) ||
+               (src and InputDevice.SOURCE_CLASS_POINTER != 0 && event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) ||
+               (event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) ||
+               event.isFromSource(InputDevice.SOURCE_MOUSE)
     }
 
-    // Intercept physical USB mouse relative motion and clicks: ensures mouse never moves on Phone A
+    // Unified mouse processing with sub-pixel accumulator and tablet screen scaling
+    private fun processMouseMotionEvent(event: MotionEvent): Boolean {
+        if (!hidManager.uiState.value.isHidActive) return false
+
+        // Keep pointer capture continuously locked & local cursor invisible on Phone A
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !window.decorView.hasPointerCapture()) {
+            requestMousePointerCapture()
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            window.decorView.pointerIcon = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
+        }
+
+        // 1. Extract raw relative motion (unbounded) or continuous fallback deltas
+        val rawRelX = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
+        } else 0f
+        val rawRelY = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
+        } else 0f
+
+        val dx: Float
+        val dy: Float
+
+        if (rawRelX != 0f || rawRelY != 0f) {
+            dx = rawRelX
+            dy = rawRelY
+            lastMouseX = Float.NaN
+            lastMouseY = Float.NaN
+        } else {
+            if (!lastMouseX.isNaN() && !lastMouseY.isNaN()) {
+                dx = event.x - lastMouseX
+                dy = event.y - lastMouseY
+            } else {
+                dx = 0f
+                dy = 0f
+            }
+            lastMouseX = event.x
+            lastMouseY = event.y
+        }
+
+        // 2. High-precision tablet scaling with sub-pixel accumulator
+        // 2.2x scaling allows cursor to effortlessly cover the full tablet screen without getting stuck at phone edges
+        val tabletScale = 2.2f
+        mouseAccumulatorX += dx * tabletScale
+        mouseAccumulatorY += dy * tabletScale
+
+        val sendDx = mouseAccumulatorX.toInt().coerceIn(-127, 127).toByte()
+        val sendDy = mouseAccumulatorY.toInt().coerceIn(-127, 127).toByte()
+
+        mouseAccumulatorX -= sendDx.toFloat()
+        mouseAccumulatorY -= sendDy.toFloat()
+
+        // 3. Extract mouse buttons (Left, Right, Middle)
+        val buttons = event.buttonState
+        var buttonMask: Byte = 0
+        if ((buttons and MotionEvent.BUTTON_PRIMARY) != 0 ||
+            (event.action == MotionEvent.ACTION_DOWN && buttons == 0)
+        ) {
+            buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_LEFT.toInt()).toByte()
+        }
+        if ((buttons and MotionEvent.BUTTON_SECONDARY) != 0) {
+            buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_RIGHT.toInt()).toByte()
+        }
+        if ((buttons and MotionEvent.BUTTON_TERTIARY) != 0) {
+            buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_MIDDLE.toInt()).toByte()
+        }
+        if (event.action == MotionEvent.ACTION_UP) {
+            buttonMask = 0
+        }
+
+        // 4. Extract scroll wheel
+        val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+        val wheelByte = (vScroll * 1.5f).toInt().coerceIn(-127, 127).toByte()
+
+        // 5. Only dispatch when there is actual movement, wheel or button change
+        if (sendDx != 0.toByte() || sendDy != 0.toByte() || wheelByte != 0.toByte() || buttonMask != lastSentButtons) {
+            lastSentButtons = buttonMask
+            hidManager.sendMouseMotion(buttonMask, sendDx, sendDy, wheelByte)
+        }
+
+        return true // Completely consumed! Phone A never clicks its own screen!
+    }
+
+    // Android Oreo+ official pointer capture callback
+    private fun handleCapturedPointer(event: MotionEvent): Boolean {
+        return processMouseMotionEvent(event)
+    }
+
+    // Intercept physical USB mouse relative motion and clicks
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         if (hidManager.uiState.value.isHidActive &&
-            (event.source and InputDevice.SOURCE_CLASS_POINTER != 0 || event.isFromSource(InputDevice.SOURCE_MOUSE))
+            (isMouseEvent(event) || (event.source and InputDevice.SOURCE_CLASS_POINTER != 0))
         ) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !window.decorView.hasPointerCapture()) {
-                requestMousePointerCapture()
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                window.decorView.pointerIcon = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
-            }
-
-            var dx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
-            } else {
-                0f
-            }
-            var dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
-            } else {
-                0f
-            }
-
-            if (dx == 0f && dy == 0f) {
-                if (!lastMouseX.isNaN() && !lastMouseY.isNaN()) {
-                    dx = event.x - lastMouseX
-                    dy = event.y - lastMouseY
-                }
-                lastMouseX = event.x
-                lastMouseY = event.y
-            }
-
-            val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-            val buttons = event.buttonState
-
-            var buttonMask: Byte = 0
-            if ((buttons and MotionEvent.BUTTON_PRIMARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_LEFT.toInt()).toByte()
-            }
-            if ((buttons and MotionEvent.BUTTON_SECONDARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_RIGHT.toInt()).toByte()
-            }
-            if ((buttons and MotionEvent.BUTTON_TERTIARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_MIDDLE.toInt()).toByte()
-            }
-
-            val dxByte = dx.toInt().coerceIn(-127, 127).toByte()
-            val dyByte = dy.toInt().coerceIn(-127, 127).toByte()
-            val wheelByte = (vScroll * 1f).toInt().coerceIn(-127, 127).toByte()
-
-            hidManager.sendMouseMotion(buttonMask, dxByte, dyByte, wheelByte)
-            return true
+            return processMouseMotionEvent(event)
         }
         return super.dispatchGenericMotionEvent(event)
     }
 
     // Intercept USB mouse touch events to prevent Phone A from clicking its own UI when active
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (hidManager.uiState.value.isHidActive && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !window.decorView.hasPointerCapture()) {
-                requestMousePointerCapture()
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                window.decorView.pointerIcon = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL)
-            }
-
-            // Forward mouse click directly and prevent local phone A touch processing
-            val buttons = event.buttonState
-            var buttonMask: Byte = 0
-            if ((buttons and MotionEvent.BUTTON_PRIMARY) != 0 || event.action == MotionEvent.ACTION_DOWN) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_LEFT.toInt()).toByte()
-            }
-            if ((buttons and MotionEvent.BUTTON_SECONDARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_RIGHT.toInt()).toByte()
-            }
-            if ((buttons and MotionEvent.BUTTON_TERTIARY) != 0) {
-                buttonMask = (buttonMask.toInt() or HidConsts.MOUSE_BTN_MIDDLE.toInt()).toByte()
-            }
-            val finalMask = if (event.action == MotionEvent.ACTION_UP) 0.toByte() else buttonMask
-
-            var dx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
-            } else {
-                0f
-            }
-            var dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
-            } else {
-                0f
-            }
-
-            if (dx == 0f && dy == 0f) {
-                if (!lastMouseX.isNaN() && !lastMouseY.isNaN()) {
-                    dx = event.x - lastMouseX
-                    dy = event.y - lastMouseY
-                }
-                lastMouseX = event.x
-                lastMouseY = event.y
-            }
-
-            val dxByte = dx.toInt().coerceIn(-127, 127).toByte()
-            val dyByte = dy.toInt().coerceIn(-127, 127).toByte()
-
-            hidManager.sendMouseMotion(finalMask, dxByte, dyByte, 0)
-            return true
+        if (hidManager.uiState.value.isHidActive && isMouseEvent(event)) {
+            return processMouseMotionEvent(event)
         }
         return super.dispatchTouchEvent(event)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (hidManager.uiState.value.isHidActive) {
+            // Filter out mouse-generated Android BACK key events so right-click is strictly sent as HID mouse button 2
+            if (event.source and InputDevice.SOURCE_MOUSE != 0 && event.keyCode == KeyEvent.KEYCODE_BACK) {
+                return true
+            }
+
             val hidCode = AndroidKeyToHid.mapKeyCodeToHid(event.keyCode)
             val modifier = AndroidKeyToHid.mapModifierMask(event.keyCode)
 

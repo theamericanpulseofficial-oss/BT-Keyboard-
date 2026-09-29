@@ -73,6 +73,8 @@ fun MouseCaptureOverlay(
 ) {
     val view = LocalView.current
     var activeButtonsMask by remember { mutableStateOf(0.toByte()) }
+    var trackpadAccumX by remember { mutableFloatStateOf(0f) }
+    var trackpadAccumY by remember { mutableFloatStateOf(0f) }
 
     Column(
         modifier = modifier
@@ -157,9 +159,15 @@ fun MouseCaptureOverlay(
                         onDrag = { change, dragAmount ->
                             change.consume()
                             if (isHidActive) {
-                                val dx = (dragAmount.x * 1.4f).toInt().coerceIn(-127, 127).toByte()
-                                val dy = (dragAmount.y * 1.4f).toInt().coerceIn(-127, 127).toByte()
-                                hidManager.sendMouseMotion(activeButtonsMask, dx, dy, 0)
+                                trackpadAccumX += dragAmount.x * 2.2f
+                                trackpadAccumY += dragAmount.y * 2.2f
+                                val dx = trackpadAccumX.toInt().coerceIn(-127, 127).toByte()
+                                val dy = trackpadAccumY.toInt().coerceIn(-127, 127).toByte()
+                                trackpadAccumX -= dx.toFloat()
+                                trackpadAccumY -= dy.toFloat()
+                                if (dx != 0.toByte() || dy != 0.toByte()) {
+                                    hidManager.sendMouseMotion(activeButtonsMask, dx, dy, 0)
+                                }
                             }
                         }
                     )
