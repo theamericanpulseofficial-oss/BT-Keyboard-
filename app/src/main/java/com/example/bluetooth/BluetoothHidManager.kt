@@ -143,6 +143,7 @@ class BluetoothHidManager(private val context: Context) {
                 connectionState = state,
                 connectedDevice = if (state == BluetoothProfile.STATE_CONNECTED) device else null,
                 targetDevice = device ?: _uiState.value.targetDevice,
+                isHidActive = if (state == BluetoothProfile.STATE_CONNECTED) true else if (state == BluetoothProfile.STATE_DISCONNECTED) false else _uiState.value.isHidActive,
                 statusMessage = "Target ${device?.name ?: "Device"}: $stateStr"
             )
         }
@@ -320,17 +321,9 @@ class BluetoothHidManager(private val context: Context) {
             BluetoothHidDevice.SUBCLASS1_COMBO,
             HidConsts.HID_REPORT_DESCRIPTOR
         )
-        val qosSettings = BluetoothHidDeviceAppQosSettings(
-            BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
-            800,
-            9,
-            0,
-            11250,
-            BluetoothHidDeviceAppQosSettings.MAX
-        )
 
         try {
-            val success = dev.registerApp(sdpSettings, qosSettings, qosSettings, hidDispatcher, hidCallback)
+            val success = dev.registerApp(sdpSettings, null, null, hidDispatcher, hidCallback)
             Log.d(TAG, "registerApp result: $success")
             _uiState.value = _uiState.value.copy(
                 statusMessage = if (success) "Registering HID SDP profile..." else "Failed to register HID app."

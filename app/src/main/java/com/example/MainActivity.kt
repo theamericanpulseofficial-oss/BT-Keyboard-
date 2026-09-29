@@ -154,10 +154,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isMouseEvent(event: MotionEvent): Boolean {
-        val src = event.source
-        return (src and InputDevice.SOURCE_MOUSE != 0) ||
-               (src and InputDevice.SOURCE_CLASS_POINTER != 0 && event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) ||
-               (event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) ||
+        // Exclude finger touches completely so phone screen UI remains 100% interactive
+        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER) return false
+        return event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE ||
                event.isFromSource(InputDevice.SOURCE_MOUSE)
     }
 
@@ -357,6 +356,12 @@ fun MainScreen(
             )
         }
         permissionLauncher.launch(requiredPermissions)
+    }
+
+    LaunchedEffect(btState.isHidActive) {
+        if (btState.isHidActive) {
+            onRequestPointerCapture()
+        }
     }
 
     Scaffold(
