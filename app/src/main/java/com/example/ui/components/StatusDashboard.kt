@@ -81,6 +81,7 @@ fun StatusDashboard(
     onStop: () -> Unit,
     onOpenFullscreenKeyboard: () -> Unit,
     onOpenGamePad: () -> Unit = {},
+    onMakeDiscoverable: () -> Unit = {},
     onShowLimitations: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -268,6 +269,32 @@ fun StatusDashboard(
                     fontWeight = FontWeight.Bold
                 )
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Discoverable Button: Allows Tablet to discover & pair this Phone
+        OutlinedButton(
+            onClick = onMakeDiscoverable,
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AmberWarning),
+            border = androidx.compose.foundation.BorderStroke(1.dp, AmberWarning.copy(alpha = 0.7f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(38.dp)
+                .testTag("make_discoverable_button")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Bluetooth,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "📡 MAKE PHONE DISCOVERABLE (PAIR TABLET)",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
 
         Spacer(modifier = Modifier.height(8.dp))

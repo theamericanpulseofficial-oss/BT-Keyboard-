@@ -321,18 +321,44 @@ class BluetoothHidManager(private val context: Context) {
             BluetoothHidDevice.SUBCLASS1_COMBO,
             HidConsts.HID_REPORT_DESCRIPTOR
         )
+        val qosSettings = BluetoothHidDeviceAppQosSettings(
+            BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
+            800,
+            9,
+            0,
+            11250,
+            BluetoothHidDeviceAppQosSettings.MAX
+        )
 
         try {
-            val success = dev.registerApp(sdpSettings, null, null, hidDispatcher, hidCallback)
+            // First unregister any zombie registration from previous app run
+            try {
+                dev.unregisterApp()
+            } catch (_: Exception) {}
+
+            val success = dev.registerApp(sdpSettings, qosSettings, qosSettings, hidDispatcher, hidCallback)
             Log.d(TAG, "registerApp result: $success")
             _uiState.value = _uiState.value.copy(
-                statusMessage = if (success) "Registering HID SDP profile..." else "Failed to register HID app."
+                isAppRegistered = success,
+                statusMessage = if (success) "HID Registered. Ready to pair & connect." else "Failed to register HID app."
             )
         } catch (e: Exception) {
             Log.e(TAG, "Exception during registerApp", e)
             _uiState.value = _uiState.value.copy(
                 errorMessage = "Failed to register HID profile: ${e.message}"
             )
+        }
+    }
+
+    fun requestDiscoverable() {
+        try {
+            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+                putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Cannot launch discoverable intent", e)
         }
     }
 
@@ -633,6 +659,9 @@ class BluetoothHidManager(private val context: Context) {
     }
 
     fun cleanUp() {
+        try {
+            unregisterHidApp()
+        } catch (_: Exception) {}
         try {
             context.unregisterReceiver(btReceiver)
         } catch (_: Exception) {}

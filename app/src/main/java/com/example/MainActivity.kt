@@ -420,6 +420,9 @@ fun MainScreen(
                     onOpenGamePad = {
                         showGamePadOverlay = true
                     },
+                    onMakeDiscoverable = {
+                        hidManager.requestDiscoverable()
+                    },
                     onShowLimitations = { showLimitationsDialog = true }
                 )
             }
